@@ -1,6 +1,7 @@
 package main
 
 import (
+	"database/sql"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -28,9 +29,8 @@ type Chirp struct {
 }
 
 type User struct {
-	Email        string        `json:"email"`    // Change to 'email'
-	Password     string        `json:"password"` // Change to 'hashed_password'
-	ExpiresInSec time.Duration `json:"expires_in_seconds"`
+	Email    string `json:"email"`    // Change to 'email'
+	Password string `json:"password"` // Change to 'hashed_password'
 }
 
 func (a *apiConfig) middlewareMetricsInc(next http.Handler) http.Handler {
@@ -61,14 +61,26 @@ func (a *apiConfig) resetMetricsHandler(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 
-	err := a.dbQueries.DeleteAllUsers(r.Context())
+	err := a.dbQueries.DeleteAllTokens(r.Context())
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	err = a.dbQueries.DeleteAllChirps(r.Context())
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	err = a.dbQueries.DeleteAllUsers(r.Context())
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
 
 	w.WriteHeader(http.StatusOK)
-	w.Write([]byte("All users have been deleted"))
+	w.Write([]byte("All has been deleted"))
 }
 
 func (a *apiConfig) createNewUserHandler(w http.ResponseWriter, r *http.Request) {
@@ -102,7 +114,7 @@ func (a *apiConfig) createNewUserHandler(w http.ResponseWriter, r *http.Request)
 func (a *apiConfig) createNewChirpHandler(w http.ResponseWriter, r *http.Request) {
 	tokenString, err := internal.GetBearerToken(r.Header)
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		http.Error(w, err.Error(), http.StatusUnauthorized)
 		return
 	}
 
@@ -208,11 +220,60 @@ func (a *apiConfig) loginUser(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if userData.ExpiresInSec == 0 {
-		userData.ExpiresInSec = time.Hour * 1
+	// Access token expires in 1h
+	token, err := internal.MakeJWT(user.ID, a.secret, time.Hour*1)
+	if err != nil {
+		http.Error(w, "Error generating token", http.StatusInternalServerError)
+		return
 	}
 
-	token, err := internal.MakeJWT(user.ID, a.secret, userData.ExpiresInSec)
+	newRefreshToken, err := internal.MakeRefreshToken()
+	if err != nil {
+		http.Error(w, "Error generating token", http.StatusInternalServerError)
+	}
+
+	refreshToken, err := a.dbQueries.CreateRefreshToken(r.Context(), database.CreateRefreshTokenParams{
+		Token:     newRefreshToken,
+		UserID:    user.ID,
+		ExpiresAt: time.Now().Add(60 * 24 * time.Hour),
+		RevokedAt: sql.NullTime{},
+	})
+	if err != nil {
+		http.Error(w, "Error creating token", http.StatusInternalServerError)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusOK)
+	w.Write([]byte(fmt.Sprintf(`{"id": "%s", "created_at": "%s", "updated_at": "%s", "email": "%s", "token": "%s", "refresh_token": "%s"}`, user.ID, user.CreatedAt, user.UpdatedAt, user.Email, token, refreshToken.Token)))
+}
+
+func (a *apiConfig) refreshToken(w http.ResponseWriter, r *http.Request) {
+	requestToken, err := internal.GetBearerToken(r.Header)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusUnauthorized)
+		return
+	}
+
+	refreshToken, err := a.dbQueries.GetRefreshToken(r.Context(), requestToken)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusUnauthorized)
+		return
+	}
+
+	if time.Now().After(refreshToken.ExpiresAt) {
+		http.Error(w, "token expired", http.StatusUnauthorized)
+		return
+	}
+
+	if refreshToken.RevokedAt.Valid {
+		// The token is revoked, you can handle accordingly
+		http.Error(w, "Refresh token is revoked", http.StatusUnauthorized)
+		return
+	}
+
+	// Access token expires in 1h
+	token, err := internal.MakeJWT(refreshToken.UserID, a.secret, time.Hour*1)
 	if err != nil {
 		http.Error(w, "Error generating token", http.StatusInternalServerError)
 		return
@@ -220,5 +281,27 @@ func (a *apiConfig) loginUser(w http.ResponseWriter, r *http.Request) {
 
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)
-	w.Write([]byte(fmt.Sprintf(`{"id": "%s", "created_at": "%s", "updated_at": "%s", "email": "%s", "token": "%s"}`, user.ID, user.CreatedAt, user.UpdatedAt, user.Email, token)))
+	w.Write([]byte(fmt.Sprintf(`{"token": "%s"}`, token)))
+}
+
+func (a *apiConfig) revokeToken(w http.ResponseWriter, r *http.Request) {
+	requstToken, err := internal.GetBearerToken(r.Header)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	refreshToken, err := a.dbQueries.GetRefreshToken(r.Context(), requstToken)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusUnauthorized)
+		return
+	}
+
+	err = a.dbQueries.RevokeRefreshToken(r.Context(), refreshToken.Token)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusNoContent)
 }
