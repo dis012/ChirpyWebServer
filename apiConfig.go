@@ -273,7 +273,7 @@ func (a *apiConfig) refreshToken(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Access token expires in 1h
-	token, err := internal.MakeJWT(refreshToken.UserID, a.secret, time.Hour*1)
+	token, err := internal.MakeJWT(refreshToken.UserID, a.secret, time.Hour)
 	if err != nil {
 		http.Error(w, "Error generating token", http.StatusInternalServerError)
 		return
@@ -304,4 +304,46 @@ func (a *apiConfig) revokeToken(w http.ResponseWriter, r *http.Request) {
 
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusNoContent)
+}
+
+func (a *apiConfig) updateUserPassAndEmail(w http.ResponseWriter, r *http.Request) {
+	var newData User
+
+	err := json.NewDecoder(r.Body).Decode(&newData)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+
+	requstAccessToken, err := internal.GetBearerToken(r.Header)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusUnauthorized)
+		return
+	}
+
+	userId, err := internal.ValidateJWT(requstAccessToken, a.secret)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusUnauthorized)
+		return
+	}
+
+	newHashedPassword, err := internal.HashPassword(newData.Password)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	user, err := a.dbQueries.UpdatePasswordAndEmail(r.Context(), database.UpdatePasswordAndEmailParams{
+		Email:          newData.Email,
+		HashedPassword: newHashedPassword,
+		ID:             userId,
+	})
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusOK)
+	w.Write([]byte(fmt.Sprintf(`{"id": "%s", "created_at": "%s", "updated_at": "%s", "email": "%s"}`, user.ID, user.CreatedAt, user.UpdatedAt, newData.Email)))
 }

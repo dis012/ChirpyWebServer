@@ -61,6 +61,7 @@ func main() {
 	serverMux.HandleFunc("POST /api/login", apiCfg.loginUser)
 	serverMux.HandleFunc("POST /api/refresh", apiCfg.refreshToken)
 	serverMux.HandleFunc("POST /api/revoke", apiCfg.revokeToken)
+	serverMux.HandleFunc("PUT /api/users", apiCfg.updateUserPassAndEmail)
 
 	newServer := &http.Server{
 		Addr:    port,
