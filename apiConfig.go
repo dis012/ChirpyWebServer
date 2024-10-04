@@ -179,7 +179,7 @@ func (a *apiConfig) getChirpByIdHandler(w http.ResponseWriter, r *http.Request) 
 
 	chirp, err := a.dbQueries.GetChirpById(r.Context(), ChirpParam)
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		http.Error(w, err.Error(), http.StatusNotFound)
 		return
 	}
 
@@ -346,4 +346,49 @@ func (a *apiConfig) updateUserPassAndEmail(w http.ResponseWriter, r *http.Reques
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)
 	w.Write([]byte(fmt.Sprintf(`{"id": "%s", "created_at": "%s", "updated_at": "%s", "email": "%s"}`, user.ID, user.CreatedAt, user.UpdatedAt, newData.Email)))
+}
+
+func (a *apiConfig) deleteChirpById(w http.ResponseWriter, r *http.Request) {
+	ChirpParam, err := uuid.Parse(r.PathValue("chirpID"))
+	if err != nil {
+		http.Error(w, "Invalid UUID", http.StatusBadRequest)
+		return
+	}
+
+	requestActionToken, err := internal.GetBearerToken(r.Header)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusUnauthorized)
+		return
+	}
+
+	userId, err := internal.ValidateJWT(requestActionToken, a.secret)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusUnauthorized)
+		return
+	}
+
+	chirp, err := a.dbQueries.GetChirpById(r.Context(), ChirpParam)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	if chirp.ID == uuid.Nil {
+		w.WriteHeader(http.StatusNotFound)
+		return
+	}
+
+	if chirp.UserID != userId {
+		w.WriteHeader(http.StatusForbidden)
+		return
+	}
+
+	err = a.dbQueries.DeleteChirpById(r.Context(), chirp.ID)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusNotFound)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusNoContent)
 }
