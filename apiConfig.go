@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"sort"
 	"sync/atomic"
 	"time"
 
@@ -160,6 +161,53 @@ func (a *apiConfig) createNewChirpHandler(w http.ResponseWriter, r *http.Request
 }
 
 func (a *apiConfig) getAllChirpsHandler(w http.ResponseWriter, r *http.Request) {
+	queryParam := r.URL.Query().Get("author_id")
+
+	queryParamOrderBy := r.URL.Query().Get("sort")
+	if queryParamOrderBy == "" {
+		queryParamOrderBy = "asc"
+	}
+
+	if queryParam != "" {
+		userId, _ := uuid.Parse(queryParam)
+		authorChirps, err := a.dbQueries.GetAuthorChirps(r.Context(), userId)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+		}
+
+		if len(authorChirps) == 0 {
+			w.WriteHeader(http.StatusNotFound)
+			return
+		}
+
+		if queryParamOrderBy == "desc" {
+			// Sort in descending order
+			sort.Slice(authorChirps, func(i, j int) bool {
+				return authorChirps[i].CreatedAt.After(authorChirps[j].CreatedAt)
+			})
+		} else {
+			// Sort in ascending order (default)
+			sort.Slice(authorChirps, func(i, j int) bool {
+				return authorChirps[i].CreatedAt.Before(authorChirps[j].CreatedAt)
+			})
+		}
+
+		var chirpsSet []Chirp
+		for _, chirp := range authorChirps {
+			chirpsSet = append(chirpsSet, Chirp{
+				ID:        chirp.ID,
+				CreatedAt: chirp.CreatedAt,
+				UpdatedAt: chirp.UpdatedAt,
+				UserID:    chirp.UserID,
+				Body:      chirp.Body,
+			})
+		}
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		// Write the array of chirps to the response
+		json.NewEncoder(w).Encode(chirpsSet)
+	}
+
 	chirps, err := a.dbQueries.GetAllChirps(r.Context())
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
@@ -171,10 +219,19 @@ func (a *apiConfig) getAllChirpsHandler(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 
-	var chirpsSet []Chirp
+	if queryParamOrderBy == "desc" {
+		// Sort in descending order
+		sort.Slice(chirps, func(i, j int) bool {
+			return chirps[i].CreatedAt.After(chirps[j].CreatedAt)
+		})
+	} else {
+		// Sort in ascending order (default)
+		sort.Slice(chirps, func(i, j int) bool {
+			return chirps[i].CreatedAt.Before(chirps[j].CreatedAt)
+		})
+	}
 
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(http.StatusOK)
+	var chirpsSet []Chirp
 	for _, chirp := range chirps {
 		chirpsSet = append(chirpsSet, Chirp{
 			ID:        chirp.ID,
@@ -184,6 +241,9 @@ func (a *apiConfig) getAllChirpsHandler(w http.ResponseWriter, r *http.Request) 
 			Body:      chirp.Body,
 		})
 	}
+
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusOK)
 	// Write the array of chirps to the response
 	json.NewEncoder(w).Encode(chirpsSet)
 }
