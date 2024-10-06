@@ -18,6 +18,7 @@ type apiConfig struct {
 	dbQueries      *database.Queries
 	platform       string
 	secret         string
+	apiKey         string
 }
 
 type Chirp struct {
@@ -31,6 +32,13 @@ type Chirp struct {
 type User struct {
 	Email    string `json:"email"`    // Change to 'email'
 	Password string `json:"password"` // Change to 'hashed_password'
+}
+
+type WebhookData struct {
+	Event string `json:"event"`
+	Data  struct {
+		UserId uuid.UUID `json:"user_id"`
+	} `json:"data"`
 }
 
 func (a *apiConfig) middlewareMetricsInc(next http.Handler) http.Handler {
@@ -108,7 +116,17 @@ func (a *apiConfig) createNewUserHandler(w http.ResponseWriter, r *http.Request)
 
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusCreated)
-	w.Write([]byte(fmt.Sprintf(`{"id": "%s", "created_at": "%s", "updated_at": "%s", "email": "%s"}`, newUser.ID, newUser.CreatedAt, newUser.UpdatedAt, newUser.Email)))
+
+	// Use the json package to encode the response properly
+	response := map[string]interface{}{
+		"id":            newUser.ID,
+		"created_at":    newUser.CreatedAt,
+		"updated_at":    newUser.UpdatedAt,
+		"email":         newUser.Email,
+		"is_chirpy_red": newUser.IsChirpyRed, // This will be a boolean
+	}
+
+	json.NewEncoder(w).Encode(response)
 }
 
 func (a *apiConfig) createNewChirpHandler(w http.ResponseWriter, r *http.Request) {
@@ -245,7 +263,19 @@ func (a *apiConfig) loginUser(w http.ResponseWriter, r *http.Request) {
 
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)
-	w.Write([]byte(fmt.Sprintf(`{"id": "%s", "created_at": "%s", "updated_at": "%s", "email": "%s", "token": "%s", "refresh_token": "%s"}`, user.ID, user.CreatedAt, user.UpdatedAt, user.Email, token, refreshToken.Token)))
+
+	// Use the json package to encode the response properly
+	response := map[string]interface{}{
+		"id":            user.ID,
+		"created_at":    user.CreatedAt,
+		"updated_at":    user.UpdatedAt,
+		"email":         user.Email,
+		"is_chirpy_red": user.IsChirpyRed, // This will be a boolean
+		"refresh_token": refreshToken.Token,
+		"token":         token,
+	}
+
+	json.NewEncoder(w).Encode(response)
 }
 
 func (a *apiConfig) refreshToken(w http.ResponseWriter, r *http.Request) {
@@ -345,7 +375,15 @@ func (a *apiConfig) updateUserPassAndEmail(w http.ResponseWriter, r *http.Reques
 
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)
-	w.Write([]byte(fmt.Sprintf(`{"id": "%s", "created_at": "%s", "updated_at": "%s", "email": "%s"}`, user.ID, user.CreatedAt, user.UpdatedAt, newData.Email)))
+	response := map[string]interface{}{
+		"id":            user.ID,
+		"created_at":    user.CreatedAt,
+		"updated_at":    user.UpdatedAt,
+		"email":         user.Email,
+		"is_chirpy_red": user.IsChirpyRed, // This will be a boolean
+	}
+
+	json.NewEncoder(w).Encode(response)
 }
 
 func (a *apiConfig) deleteChirpById(w http.ResponseWriter, r *http.Request) {
@@ -386,6 +424,43 @@ func (a *apiConfig) deleteChirpById(w http.ResponseWriter, r *http.Request) {
 	err = a.dbQueries.DeleteChirpById(r.Context(), chirp.ID)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusNotFound)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusNoContent)
+}
+
+func (a *apiConfig) upgradeUser(w http.ResponseWriter, r *http.Request) {
+	apiKey, err := internal.GetAPIKey(r.Header)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusUnauthorized)
+		return
+	}
+
+	if apiKey != a.apiKey {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusUnauthorized)
+		return
+	}
+
+	var requestData WebhookData
+	err = json.NewDecoder(r.Body).Decode(&requestData)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	if requestData.Event != "user.upgraded" {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusNoContent)
+		return
+	}
+
+	_, err = a.dbQueries.UpgradeUser(r.Context(), requestData.Data.UserId)
+	if err != nil {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusNotFound)
 		return
 	}
 

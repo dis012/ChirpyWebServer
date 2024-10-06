@@ -31,6 +31,11 @@ func main() {
 		log.Fatal("SECRET environment variable is required")
 	}
 
+	apiKey := os.Getenv("POLKA_KEY")
+	if apiKey == "" {
+		log.Fatal("POLKA_KEY enviroment variable is required")
+	}
+
 	db, err := sql.Open("postgres", dbURL)
 	if err != nil {
 		log.Fatalf("Error opening database: %v", err)
@@ -43,6 +48,7 @@ func main() {
 		dbQueries:      dbQueries,
 		platform:       dbPlatform,
 		secret:         secret,
+		apiKey:         apiKey,
 	}
 
 	serverMux := http.NewServeMux()
@@ -63,6 +69,7 @@ func main() {
 	serverMux.HandleFunc("POST /api/revoke", apiCfg.revokeToken)
 	serverMux.HandleFunc("PUT /api/users", apiCfg.updateUserPassAndEmail)
 	serverMux.HandleFunc("DELETE /api/chirps/{chirpID}", apiCfg.deleteChirpById)
+	serverMux.HandleFunc("POST /api/polka/webhooks", apiCfg.upgradeUser)
 
 	newServer := &http.Server{
 		Addr:    port,
